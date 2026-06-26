@@ -26,14 +26,16 @@ To use a different model, follow the [Change the model](#change-the-model) secti
 curl -fsSL https://raw.githubusercontent.com/JZKK720/hermes-agent/main/docker/deploy.sh | bash
 ```
 
-The script clones the repo, seeds `data/.env`, and recreates all services from the Docker Hub-published `docker.io/nousresearch/hermes-agent:latest` image with the upstream-image compose file.
+The script clones the repo, seeds `data/.env`, and recreates all services from the fork's GHCR-published `ghcr.io/jzkk720/hermes-agent:latest` image with the upstream-image compose file.
 
-Routine updates on an existing machine stay pinned to the published upstream image:
+Routine updates on an existing machine stay pinned to the fork's GHCR image:
 
 ```bash
 git pull origin main
 docker compose -f docker-compose.upstream.yml up -d --pull always --force-recreate --remove-orphans
 ```
+
+To fall back to the upstream Docker Hub image, set `HERMES_FORK_IMAGE=docker.io/nousresearch/hermes-agent:latest` before running compose.
 
 ---
 
@@ -61,7 +63,7 @@ Edit `data/.env` if needed (see [Configuration](#configuration) below). For a pl
 docker compose -f docker-compose.upstream.yml up -d --pull always --force-recreate --remove-orphans
 ```
 
-This keeps the local `data/.env`, `data/config.yaml`, sessions, memories, and PostgreSQL data while pulling the published upstream Docker Hub image. Use this pulled-image compose path for routine refreshes on this fork; do not switch the machine to a fork-owned build lane for normal updates.
+This keeps the local `data/.env`, `data/config.yaml`, sessions, memories, and PostgreSQL data while pulling the fork's GHCR-published image. Use this pulled-image compose path for routine refreshes on this fork; do not switch the machine to a fork-owned build lane for normal updates.
 
 ---
 
@@ -108,7 +110,7 @@ docker compose -f docker-compose.upstream.yml logs -f hermes-web                
 docker compose -f docker-compose.upstream.yml logs -f hermes-gateway                                 # WeChat gateway logs only
 docker compose -f docker-compose.upstream.yml down                                                   # stop all services
 docker compose -f docker-compose.upstream.yml down -v                                                # stop + delete volumes (resets data!)
-docker compose -f docker-compose.upstream.yml up -d --pull always --force-recreate --remove-orphans # start or refresh from the published upstream image
+docker compose -f docker-compose.upstream.yml up -d --pull always --force-recreate --remove-orphans # start or refresh from the fork GHCR image
 ```
 
 ### Smoke test
@@ -207,13 +209,13 @@ Recreate both services together so the dashboard and gateway stay on the same up
 docker compose -f docker-compose.upstream.yml up -d --pull always --force-recreate --remove-orphans
 ```
 
-### Pull fails resolving `docker.io/nousresearch/hermes-agent:latest`
+### Pull fails resolving `ghcr.io/jzkk720/hermes-agent:latest`
 
-That reference is the expected upstream image source for this fork. Hermes is not published from GHCR in this repo's release workflow. If Docker reports a timeout or `failed to do request: Head ...` against `docker.io/nousresearch/hermes-agent:latest`, treat it as a Docker Hub connectivity or auth problem on the machine, not a compose-registry mismatch.
+That reference is the fork's GHCR image source. The fork publishes its own image (with Weixin QR onboarding + dashboard auth) to GHCR via the `fork-ghcr-publish.yml` workflow. If Docker reports a timeout or `failed to do request: Head ...`, treat it as a GHCR connectivity or auth problem on the machine.
 
 ```bash
-docker login
-docker pull docker.io/nousresearch/hermes-agent:latest
+docker login ghcr.io
+docker pull ghcr.io/jzkk720/hermes-agent:latest
 docker compose -f docker-compose.upstream.yml up -d --pull always --force-recreate --remove-orphans
 ```
 

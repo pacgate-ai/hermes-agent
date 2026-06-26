@@ -1,15 +1,15 @@
-# Standalone compose file for running the local stack against the published
-# upstream Docker Hub Hermes image while keeping the local ./data env and config mounts.
+# Standalone compose file for running the local stack against the fork's
+# published GHCR image (includes Weixin QR onboarding + dashboard auth).
 #
 # Routine refresh:
 #   docker compose -f docker-compose.upstream.yml up -d --pull always --force-recreate --remove-orphans
 #
-# Override HERMES_UPSTREAM_IMAGE if you want a different upstream tag:
-#   HERMES_UPSTREAM_IMAGE=docker.io/nousresearch/hermes-agent:v2026.4.23 \
+# Override HERMES_FORK_IMAGE if you want a different fork tag:
+#   HERMES_FORK_IMAGE=ghcr.io/jzkk720/hermes-agent:sha-abc1234 \
 #     docker compose -f docker-compose.upstream.yml up -d --pull always --force-recreate --remove-orphans
 
 x-hermes-common: &hermes-common
-  image: ${HERMES_UPSTREAM_IMAGE:-docker.io/nousresearch/hermes-agent:latest}
+  image: ${HERMES_FORK_IMAGE:-ghcr.io/jzkk720/hermes-agent:latest}
   pull_policy: always
   restart: unless-stopped
   volumes:
@@ -41,7 +41,13 @@ services:
   hermes-web:
     <<: *hermes-common
     container_name: hermes-web
-    command: ["dashboard", "--host", "127.0.0.1", "--port", "9119", "--no-open"]
+    # Bind 0.0.0.0 inside the container so Docker port forwarding works.
+    # Host-side binding is 127.0.0.1 (see ports below) so it's not LAN-exposed.
+    # Upstream 0.17+ requires auth for non-loopback binds — basic_auth is
+    # configured in data/config.yaml (username=admin, password=hermes).
+    command: ["dashboard", "--host", "0.0.0.0", "--port", "9119", "--no-open"]
+    environment:
+      - GATEWAY_HEALTH_URL=http://hermes-gateway:8789
     volumes:
       - ./data:/opt/data
       - ./docker/hermes-config.yaml:/opt/hermes/cli-config.yaml.example:ro
@@ -65,15 +71,22 @@ services:
     # per docker/hermes-config.yaml. weixin uses outbound long-poll to
     # ilinkai.weixin.qq.com — no inbound host port needed.
     command: ["gateway", "run"]
+    environment:
+      - API_SERVER_KEY=${API_SERVER_KEY:-28765d337208aa3c0b6671cb1969e8cad9c22d7b7967b216}
+      - API_SERVER_CORS_ORIGINS=http://localhost:8788,http://host.docker.internal:8788
+      - GATEWAY_ALLOW_ALL_USERS=true
+    ports:
+      - "8789:8789"
+      - "8644:8644"
     depends_on:
       postgres:
         condition: service_healthy
       hermes-web:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c 'import os,sys; sys.exit(0 if os.path.exists(\"/opt/data/weixin/accounts\") else 1)'"]
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; r=urllib.request.urlopen('http://127.0.0.1:8789/health'); sys.exit(0 if r.status==200 else 1)"]
       interval: 30s
-      timeout: 5s
+      timeout: 10s
       retries: 3
       start_period: 60s
 
