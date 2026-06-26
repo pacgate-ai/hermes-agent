@@ -71,7 +71,7 @@ This keeps the local `data/.env`, `data/config.yaml`, sessions, memories, and Po
 
 | Service | URL | Description |
 |---|---|---|
-| Hermes Web UI | http://localhost:9119 | Chat interface |
+| Hermes Web UI | http://localhost:9119 | Chat interface — login **admin / hermes** on first boot |
 | WeChat gateway | outbound only | `hermes-gateway` runs the gateway with `weixin` (WeChat personal) enabled. No host port — uses outbound long-poll to Tencent iLink. |
 | PostgreSQL | localhost:5433 | Internal database (host port 5433) |
 
@@ -117,10 +117,12 @@ docker compose -f docker-compose.upstream.yml up -d --pull always --force-recrea
 
 ```bash
 docker compose ps
-curl -fsS http://127.0.0.1:9119/api/status
+curl -fsS http://127.0.0.1:9119/api/status    # prompts for admin/hermes first; use -u admin:hermes for non-interactive probes
 ```
 
 The web UI healthcheck on `:9119` is the primary smoke signal. The WeChat gateway has no public HTTP port — verify with `docker compose logs hermes-gateway` and look for a successful iLink `getupdates` long-poll connection.
+
+For a full four-level smoke test (container healthcheck → adapter Connected log → gateway status CLI → end-to-end inbound), use the `docker-compose-smoke-test` skill.
 
 ---
 
@@ -143,6 +145,26 @@ WeChat personal accounts (`weixin`) do not use tokens — credentials are obtain
 Auto-created from `docker/hermes-config.yaml` on first start.  
 Edit directly; no rebuild needed — takes effect on next container restart.
 
+The `dashboard.basic_auth` block defines the dashboard login. Default credentials are `admin / hermes`. **Change the password** by generating a new hash:
+
+```bash
+docker exec hermes-web python3 -c "from plugins.dashboard_auth.basic import hash_password; print(hash_password('your-new-password'))"
+```
+
+Replace the `password_hash` line in `data/config.yaml`, then restart:
+
+```bash
+docker compose -f docker-compose.upstream.yml restart hermes-web
+```
+
+If YAML escaping mangles the hash on first boot and you get locked out, run the repair script (no rebuild needed):
+
+```bash
+docker cp scripts/fix_dashboard_auth.py hermes-web:/tmp/fix.py
+docker exec -u root hermes-web python3 /tmp/fix.py   # the script must run as root to rewrite data/config.yaml
+docker compose -f docker-compose.upstream.yml restart hermes-web
+```
+
 ### Change the model
 
 Edit `data/config.yaml`:
@@ -156,7 +178,7 @@ model:
 Then restart the containers:
 
 ```bash
-docker compose restart hermes-web hermes-gateway
+docker compose -f docker-compose.upstream.yml restart hermes-web hermes-gateway
 ```
 
 ---
@@ -170,15 +192,16 @@ git pull origin main
 docker compose -f docker-compose.upstream.yml up -d --pull always --force-recreate --remove-orphans
 ```
 
-This is the normal update path for this fork. Keep regular refreshes pinned to the published upstream Docker Hub image through the fork wrapper; do not treat `upstream/main` merges as part of the routine local update flow for this machine.
+This is the normal update path for this fork. Keep regular refreshes pinned to the fork's GHCR image through the fork wrapper; do not treat `upstream/main` merges as part of the routine local update flow for this machine.
 
-### Refresh containers from the published upstream image
+### Refresh containers from the fork's GHCR image
 
 ```bash
 docker compose -f docker-compose.upstream.yml up -d --pull always --force-recreate --remove-orphans
 ```
 
-This updates the Hermes containers from the published Docker Hub image while keeping your local `data/.env`, `data/config.yaml`, sessions, and other persisted runtime data.
+This updates the Hermes containers from the fork's GHCR-published image while keeping your local `data/.env`, `data/config.yaml`, sessions, and other persisted runtime data.
+
 ---
 
 ## Troubleshooting
@@ -189,6 +212,8 @@ This updates the Hermes containers from the published Docker Hub image while kee
 docker compose ps              # check service state
 docker compose logs hermes-web # read startup output
 ```
+
+If the dashboard binds 0.0.0.0 inside the container (which is required for Docker port forwarding under upstream 0.17+), it MUST have an auth provider configured — the login challenge will fail otherwise. See [Configuration](#data-configyaml--runtime-settings) for changing the password or repairing a YAML-mangled hash.
 
 ### Model calls fail / "unknown provider"
 
@@ -203,7 +228,7 @@ Check `data/config.yaml` has `provider: "custom"` (not `"ollama"`).
 
 ### `hermes-web` and `hermes-gateway` drift to different image digests
 
-Recreate both services together so the dashboard and gateway stay on the same upstream image generation:
+Recreate both services together so the dashboard and gateway stay on the same fork image generation:
 
 ```bash
 docker compose -f docker-compose.upstream.yml up -d --pull always --force-recreate --remove-orphans
@@ -219,9 +244,15 @@ docker pull ghcr.io/jzkk720/hermes-agent:latest
 docker compose -f docker-compose.upstream.yml up -d --pull always --force-recreate --remove-orphans
 ```
 
+To fall back to the upstream Docker Hub image (which does not include the fork's Weixin QR / dashboard auth fixes), set:
+
+```bash
+HERMES_FORK_IMAGE=docker.io/nousresearch/hermes-agent:latest docker compose -f docker-compose.upstream.yml up -d --pull always --force-recreate --remove-orphans
+```
+
 ### `8644` does not respond
 
-Webhook platform is no longer pre-published in this stack. To enable inbound webhooks, bind `:8644` in `docker-compose.yml` on the `hermes-gateway` service and set `platforms.webhook.enabled: true` in `data/config.yaml`.
+Webhook platform is no longer pre-published in this stack. To enable inbound webhooks, bind `:8644` in `docker-compose.yml` on the `hermes-gateway` service (already done by default) and set `platforms.webhook.enabled: true` in `data/config.yaml`.
 
 ### Reset everything (start fresh)
 
@@ -237,6 +268,8 @@ docker compose -f docker-compose.upstream.yml up -d --pull always --force-recrea
 
 | Port (host) | Port (container) | Service |
 |---|---|---|
-| 9119 | 9119 | Hermes Web UI |
+| 9119 | 9119 | Hermes Web UI (basic_auth required) |
+| 8789 | 8789 | API server (OpenAI-compatible) |
+| 8644 | 8644 | Webhook (when enabled) |
 | — | — | `hermes-gateway` (WeChat gateway, outbound only — no host port) |
 | 5433 | 5432 | PostgreSQL |

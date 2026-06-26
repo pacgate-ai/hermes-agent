@@ -7,7 +7,10 @@
 #   - Uses Windows-style volume path for ~/.hermes
 #
 # Usage:
-#   docker compose -f docker-compose.windows.yml up -d
+#   docker compose -f docker-compose.windows.yml up -d --pull always --force-recreate --remove-orphans
+#
+# Override HERMES_FORK_IMAGE to use a different image (e.g. upstream Docker Hub):
+#   HERMES_FORK_IMAGE=docker.io/nousresearch/hermes-agent:latest docker compose -f docker-compose.windows.yml up -d ...
 #
 services:
   gateway:

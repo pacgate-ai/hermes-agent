@@ -18,12 +18,14 @@
 # Both hermes services share the same ./data volume.
 # Bootstrap (config copy, skills sync) is idempotent — safe to run in parallel.
 #
-# Hermes web UI:                  http://localhost:9119
+# Hermes web UI:                  http://localhost:9119  (login: admin / hermes)
 # Interactive CLI (chat):         docker exec -it hermes-web hermes
 # Connect WeChat (one-shot):      docker compose -f docker-compose.upstream.yml run --rm hermes-gateway hermes gateway setup
 #
 # Ports (host → container):
 #   9119 → 9119   Hermes Web UI
+#   8789 → 8789   API server (OpenAI-compatible)
+#   8644 → 8644   Webhook (when enabled)
 #   5433 → 5432   PostgreSQL (host:5433 → container:5432)
 
 x-hermes-common: &hermes-common
@@ -83,11 +85,12 @@ services:
     ports:
       - "127.0.0.1:9119:9119"
     healthcheck:
-          test: ["CMD", "python3", "-c", "import urllib.request,sys; r=urllib.request.urlopen('http://127.0.0.1:9119/api/status'); sys.exit(0 if r.status==200 else 1)"]
-          interval: 30s
-          timeout: 10s
-          retries: 3
-          start_period: 60s
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; r=urllib.request.urlopen('http://127.0.0.1:9119/api/status'); sys.exit(0 if r.status==200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
   hermes-gateway:
     <<: *hermes-common
     container_name: hermes-gateway

@@ -15,10 +15,40 @@ main checkout).
 
 ## Fork Sync and Compose Updates
 
-This workspace is also maintained as a deployment fork. When the task is to sync `origin/main` with `upstream/main`, compare fork divergence, or decide whether [docker-compose.yml](docker-compose.yml) should move from local image builds to upstream images, follow [.github/instructions/fork-maintenance.instructions.md](.github/instructions/fork-maintenance.instructions.md) and the linked deployment docs.
+This workspace is maintained as the **JZKK720 deployment fork**. The compose files (`docker-compose.yml`, `docker-compose.upstream.yml`, `docker-compose.windows.yml`) point at the fork's own GHCR image:
 
-- Treat `data/.env`, `data/config.yaml`, `data/memories/`, `data/sessions/`, and the PostgreSQL volume as persistent state.
-- Do not regenerate or delete local runtime data unless the user explicitly asks.
+```
+image: ${HERMES_FORK_IMAGE:-ghcr.io/jzkk720/hermes-agent:latest}
+```
+
+That image is built and published by [`.github/workflows/fork-ghcr-publish.yml`](.github/workflows/fork-ghcr-publish.yml) on every push to `origin/main`. It bakes in fork-only code (`gateway/platforms/weixin_qr_session.py`, the WeChat web-onboarding endpoints, the `dashboard.basic_auth` provider, the `plugins/dashboard_auth/*` providers, the `scripts/fix_dashboard_auth.py` recovery path) so the deployment never has to build locally. **Do not** switch the default update path to `docker compose up -d --build` — that bypasses the GHCR image and re-introduces the fork vs. upstream drift.
+
+To fall back to the upstream Docker Hub image (no fork-only features) for one-off debugging:
+
+```bash
+HERMES_FORK_IMAGE=docker.io/nousresearch/hermes-agent:latest \
+  docker compose -f docker-compose.upstream.yml up -d --pull always --force-recreate --remove-orphans
+```
+
+When the task is to sync `origin/main` with `upstream/main`, compare fork divergence, or pick which image to ship, follow [.github/instructions/fork-maintenance.instructions.md](.github/instructions/fork-maintenance.instructions.md).
+
+### Persistent runtime state (do not touch without explicit ask)
+
+`data/.env`, `data/config.yaml`, `data/SOUL.md`, `data/memories/`, `data/sessions/`, `data/weixin/accounts/`, and the `postgres_data` volume.
+
+### Dashboard basic_auth
+
+Upstream 0.17+ refuses to bind the dashboard to `0.0.0.0` without an auth provider, and `--insecure` is now a no-op. The fork ships `dashboard.basic_auth` (username `admin`, password `hermes`, scrypt hash baked into `docker/hermes-config.yaml`) so the standard `docker compose up -d` "just works". The host port stays bound to `127.0.0.1:9119`; only the container-internal bind is `0.0.0.0` (Docker port forwarding requires it).
+
+If YAML escaping mangles the hash on first boot and locks you out, the recovery path is:
+
+```bash
+docker cp scripts/fix_dashboard_auth.py hermes-web:/tmp/fix.py
+docker exec -u root hermes-web python3 /tmp/fix.py
+docker compose -f docker-compose.upstream.yml restart hermes-web
+```
+
+The script must run as root because `data/config.yaml` is owned by `hermes`. Changing the default credentials means updating both `docker/hermes-config.yaml` (the template) and `scripts/fix_dashboard_auth.py` (the constant) together.
 
 ## Project Structure
 
@@ -772,20 +802,22 @@ in config.yaml (or `HERMES_BACKGROUND_NOTIFICATIONS` env var):
 
 ### Fork Maintenance: Separate Repo Sync From Runtime Refresh
 
-This checkout is maintained as a fork that can carry fork-owned install docs,
-compose files, deploy scripts, prompts, and skills, while the upstream source of
-truth remains `NousResearch/hermes-agent:main`.
+This checkout is maintained as the **JZKK720 deployment fork**. The compose files
+default to the **fork's own GHCR image** (`ghcr.io/jzkk720/hermes-agent:latest`),
+which is built and published by [`.github/workflows/fork-ghcr-publish.yml`](.github/workflows/fork-ghcr-publish.yml) on every push to `origin/main`. The fork's image bakes in fork-only code so the deployment wrapper never has to build locally. `NousResearch/hermes-agent:main` remains the upstream source of truth for code, but the runtime follows the fork's image, not the upstream Docker Hub image.
 
 Treat these as three different maintenance tracks:
 
 1. **Runtime freshness only** — when the user wants the local containers updated
    but does NOT need the local repo or fork branch synced, refresh the fork's
-   deployment wrapper against the published upstream image with:
+   deployment wrapper against the **fork's GHCR image** with:
    ```bash
-  docker compose -f docker-compose.upstream.yml up -d --pull always --force-recreate --remove-orphans
+   docker compose -f docker-compose.upstream.yml up -d --pull always --force-recreate --remove-orphans
    ```
    This keeps the local `data/.env`, `data/config.yaml`, persisted data, and
-   host ports while updating the Hermes containers.
+   host ports while updating the Hermes containers. To fall back to the upstream
+   Docker Hub image (no fork features), prepend
+   `HERMES_FORK_IMAGE=docker.io/nousresearch/hermes-agent:latest`.
 
 2. **Fork source freshness from upstream** — when the user wants `origin/main`
   to stay current with `upstream/main`, compare local `HEAD`, `origin/main`,
@@ -810,24 +842,29 @@ Important consequences:
   make the machine current with `NousResearch/hermes-agent:main` unless the fork
   has already been synced from upstream.
 - `git pull origin main` updates the fork's deployment wrapper files, but the
-  runtime still follows the published upstream image configured in compose.
+  runtime still follows the **fork's GHCR image** (`ghcr.io/jzkk720/hermes-agent:latest`)
+  by default — not the upstream Docker Hub image.
 - The fork should not treat `docker compose up -d --build` or fork-owned image
-  tags as the normal update path.
-- The default compose lane still bind-mounts `docker/hermes-config.yaml`, so
-  upstream image updates can still be partially shaped by fork-local config.
-  If a task reintroduces `docker/entrypoint.sh` or another overlay, call out
-  that extra pinning risk explicitly.
+  tags as the normal update path. The GHCR workflow already publishes the image
+  on every push to `origin/main`; a local build would just re-introduce drift.
+- The default compose lane still bind-mounts `docker/hermes-config.yaml`, so the
+  fork's image can be partially shaped by fork-local config (including the
+  `dashboard.basic_auth` block — admin/hermes). If a task reintroduces
+  `docker/entrypoint.sh` or another overlay, call out that extra pinning risk
+  explicitly.
 - If the user wants the local checkout to follow `NousResearch/hermes-agent:main`
   immediately, update from `upstream/main` first and rebuild locally; do not wait
   for the fork to catch up unless they also want `origin/main` updated.
-- `docker compose -f docker-compose.upstream.yml up -d --pull always --force-recreate --remove-orphans` updates the
-  running runtime, but it does NOT update the local repo checkout or `origin/main`.
+- `docker compose -f docker-compose.upstream.yml up -d --pull always --force-recreate --remove-orphans`
+  updates the running runtime to the latest **fork GHCR image**, but it does NOT
+  update the local repo checkout or `origin/main`.
 - Syncing the local checkout with `upstream/main` does NOT update running
-  containers until either `docker compose -f docker-compose.upstream.yml up -d --pull always --force-recreate --remove-orphans`
-  or `docker compose up -d --build` is run, depending on whether the goal is
-  published-image refresh or local-source rebuild.
+  containers until either
+  `docker compose -f docker-compose.upstream.yml up -d --pull always --force-recreate --remove-orphans`
+  (fork GHCR image refresh) or `docker compose up -d --build` (local rebuild) is run.
 - If the user says "update the local container" or "pull latest," clarify whether
-  they mean runtime only, local source sync from upstream, fork sync, or both.
+  they mean runtime only (compose pull), local source sync from upstream, fork
+  sync (push to origin/main + GHCR rebuild), or both.
 - Unless the user explicitly asks otherwise, leave `upstream` read-only and do not
   push anything there.
 

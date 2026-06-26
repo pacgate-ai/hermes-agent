@@ -80,6 +80,11 @@ display:
 # so basic_auth is required. Change the password by generating a new hash:
 #   docker exec hermes-web python3 -c "from plugins.dashboard_auth.basic import hash_password; print(hash_password('your-password'))"
 # Then replace the password_hash below and restart hermes-web.
+
+# If YAML escaping mangles the hash on first boot, run:
+#   docker exec hermes-web python3 /opt/data/fix_dashboard_auth.py
+# (script shipped in scripts/fix_dashboard_auth.py)
+
 # =============================================================================
 dashboard:
   basic_auth:
